@@ -1,0 +1,10 @@
+# TikshiV1 — dépendances d'entraînement (RLGym 2.0 + RocketSim + PPO)
+# Python 3.8 – 3.12
+
+rlgym[rl-rlviser]==2.0.1
+rlgym-tools
+# rlgym-ppo n'est pas sur PyPI : installer depuis GitHub
+#   pip install git+https://github.com/AechPro/rlgym-ppo.git
+# PyTorch GPU (CUDA 12.1) — adapte à ta version de CUDA :
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+numpy
