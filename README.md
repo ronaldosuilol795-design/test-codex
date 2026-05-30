@@ -11,7 +11,9 @@ TikshiV1 est **complet et équilibré** :
 - **Règle d'or** : les mécaniques aériennes sont excellentes **mais ne sont
   jamais prioritaires** sur une solution plus efficace au sol. Concrètement, les
   rewards aériens sont *conditionnés* (balle haute / mur + boost) et *plafonnés*
-  sous les rewards de sol, et il n'y a **aucune pénalité** pour rester au sol.
+  sous les rewards de sol. Un `TouchGrassPenalty` léger pousse à décoller
+  **uniquement quand la balle est haute** (jamais balle basse → le jeu au sol
+  normal n'est pas pénalisé).
 
 ## Stack technique
 
@@ -63,7 +65,7 @@ Touches pendant l'entraînement : `p` = pause, `c` = checkpoint, `q` = checkpoin
 ## Design des rewards (recherche)
 
 - **RLGym-PPO-Guide (ZealanL)** : pas de goal reward écrasant ; touche pondérée
-  par la force du contact ; air-touch = `min(air_time, height)` (vraies
+  par la force du contact ; air-touch pondéré par la hauteur de la balle (vraies
   aériennes, pas de pop de mur plats) ; rewards **zero-sum** uniquement pour ce
   que l'adversaire doit empêcher (goals, demos, flip resets, powershots).
 - **Lucy-SKG** (bat Necto/Nexto) : reward shaping utilitaire.
