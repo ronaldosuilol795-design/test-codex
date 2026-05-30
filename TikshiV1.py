@@ -13,8 +13,8 @@ Objectif : le meilleur bot 1v1 possible.
 Pipeline : RLGym 2.0 + RocketSim + rlgym-ppo + rlgym-tools.
 
 Sources de design des rewards :
-  - RLGym-PPO-Guide (ZealanL) : touch pondéré par la force, air-touch =
-    min(air_time, height) pour de VRAIES aériennes, pas de goal reward écrasant,
+  - RLGym-PPO-Guide (ZealanL) : touch pondéré par la force, air-touch
+    pondéré par la hauteur pour de VRAIES aériennes, pas de goal reward écrasant,
     rewards zero-sum uniquement pour ce que l'adversaire doit empêcher.
   - Lucy-SKG (papier, bat Necto/Nexto) : reward shaping utilitaire.
   - Necto / Nexto : opp_punish (zero-sum), potential-based shaping.
@@ -978,6 +978,26 @@ class ChallengeReward(RewardFunction):
                 rewards[agent] = 1.0
         return rewards
 
+
+class TouchGrassPenalty(RewardFunction):
+    """
+    Pénalité légère pour rester au sol quand la balle est HAUTE (style Necto
+    touch_grass_w). Ne se déclenche jamais balle basse → ne punit pas le jeu
+    au sol normal ; pousse seulement à décoller quand l'aérien s'impose.
+    """
+    def __init__(self, ball_min_height: float = 400.0):
+        self.ball_min_height = ball_min_height
+
+    def reset(self, agents, initial_state, shared_info): pass
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        rewards = {}
+        ball_high = state.ball.position[2] > self.ball_min_height
+        for agent in agents:
+            car = state.cars[agent]
+            rewards[agent] = -1.0 if (car.on_ground and ball_high) else 0.0
+        return rewards
+
 # ─────────────────────────────────────────────────────────────────────────────
 # REWARDS AÉRIENS — excellents mais SECONDAIRES (plafonnés + conditionnés)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -986,7 +1006,7 @@ class ChallengeReward(RewardFunction):
 # excellentes mais ne jamais être prioritaires par rapport à une solution plus
 # efficace au sol ». Concrètement :
 #   - ces rewards ne se déclenchent QUE balle haute / voiture en l'air ;
-#   - aucune pénalité pour rester au sol (pas de TouchGrassPenalty) ;
+#   - TouchGrassPenalty ne pénalise le sol QUE balle haute (jamais balle basse) ;
 #   - leurs POIDS sont plafonnés sous les rewards de sol dans build_reward_fn.
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -994,11 +1014,9 @@ class ChallengeReward(RewardFunction):
 class AerialTouchReward(RewardFunction):
     """
     Touche aérienne de QUALITÉ : balle haute + voiture en l'air. Pondérée par
-    min(air_time_frac, height_frac) (RLGym-PPO-Guide) → favorise les vraies
-    aériennes (longues, hautes) plutôt que les pop de mur plats.
+    la hauteur de la balle (height_frac) → favorise les vraies aériennes
+    hautes plutôt que les pop de mur plats.
     """
-    MAX_AIR_TIME = 1.75  # s — estimation d'un temps d'aérienne raisonnable
-
     def __init__(self, min_height=400.0):
         self.min_height     = min_height
         self._prev_ball_vel = None
@@ -1017,10 +1035,8 @@ class AerialTouchReward(RewardFunction):
             if (car.ball_touches > 0
                     and not car.on_ground
                     and ball.position[2] > self.min_height):
-                air_time_frac = min(car.air_time_since_jump, self.MAX_AIR_TIME) / self.MAX_AIR_TIME
                 height_frac   = min(ball.position[2] / CEILING_Z, 1.0)
-                quality       = min(air_time_frac, height_frac)
-                rewards[agent] = accel * (1.0 + quality)
+                rewards[agent] = accel * (1.0 + height_frac)
         self._prev_ball_vel = ball.linear_velocity.copy()
         return rewards
 
@@ -1322,6 +1338,7 @@ def build_reward_fn(phase: int) -> RewardFunction:
             (GoalDistancePotentialReward(gamma=1.0),                30.0),
             # — AÉRIEN (introduction, plafonné SOUS le sol) —
             (AerialTouchReward(min_height=400.0),                   40.0),
+            (TouchGrassPenalty(ball_min_height=400.0),               3.0),
             (AerialNavigationReward(),                              10.0),
             (AerialDistanceReward(touch_height_weight=0.8,
                                   car_distance_weight=0.8,
@@ -1362,6 +1379,7 @@ def build_reward_fn(phase: int) -> RewardFunction:
             (GoalDistancePotentialReward(gamma=1.0),                30.0),
             # — AÉRIEN avancé (fort mais plafonné sous le sol) —
             (AerialTouchReward(min_height=400.0),                   50.0),
+            (TouchGrassPenalty(ball_min_height=400.0),               3.0),
             (AerialNavigationReward(),                              12.0),
             (AerialDistanceReward(touch_height_weight=1.0,
                                   car_distance_weight=1.0,
@@ -1402,6 +1420,7 @@ def build_reward_fn(phase: int) -> RewardFunction:
         (GoalDistancePotentialReward(gamma=1.0),                  30.0),
         # — AÉRIEN à son apex, mais plafonné SOUS le sol —
         (AerialTouchReward(min_height=400.0),                     60.0),
+        (TouchGrassPenalty(ball_min_height=400.0),                 3.0),
         (AerialNavigationReward(),                                15.0),
         (AerialDistanceReward(touch_height_weight=1.2,
                               car_distance_weight=1.0,
