@@ -947,6 +947,38 @@ class BehindBallReward(RewardFunction):
         return rewards
 
 
+class AlignBallToGoalReward(RewardFunction):
+    """
+    [Necto / Lucy-SKG] Alignement continu voiture–balle–but. Signal de
+    positionnement (SOL) plus riche que BehindBall (binaire) :
+      - offense : la voiture est bien placée DERRIÈRE la balle pour la pousser
+        vers le but adverse ;
+      - défense : la voiture est goalside (entre la balle et son propre but).
+    Cosine-similarité → borné [-1, 1] par terme.
+    """
+    def __init__(self, offense: float = 1.0, defense: float = 0.6):
+        self.offense = offense
+        self.defense = defense
+
+    def reset(self, agents, initial_state, shared_info): pass
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        rewards = {}
+        ball = state.ball.position
+        for agent in agents:
+            car  = state.cars[agent]
+            own  = np.array([0.,  BACK_NET_Y if car.is_orange else -BACK_NET_Y, 0.])
+            opp  = np.array([0., -BACK_NET_Y if car.is_orange else  BACK_NET_Y, 0.])
+            to_ball = ball - car.physics.position
+            n_tb = np.linalg.norm(to_ball) + 1e-8
+            off  = float(np.dot(to_ball / n_tb,
+                                (opp - ball) / (np.linalg.norm(opp - ball) + 1e-8)))
+            deff = float(np.dot(to_ball / n_tb,
+                                (own - ball) / (np.linalg.norm(own - ball) + 1e-8)))
+            rewards[agent] = self.offense * off + self.defense * deff
+        return rewards
+
+
 class ChallengeReward(RewardFunction):
     """
     [50/50 SSL] Récompense d'aller au contact quand l'adversaire est lui aussi
@@ -1222,6 +1254,48 @@ class CeilingShotReward(RewardFunction):
         self._prev_ball_v = state.ball.linear_velocity.copy()
         return rewards
 
+
+class DoubleTapReward(RewardFunction):
+    """
+    [DOUBLE TAP SSL] 2e touche aérienne après un rebond sur le mur du fond
+    adverse (backboard read). On mémorise qu'une touche aérienne a eu lieu
+    près du backboard adverse, balle haute ; si une nouvelle touche aérienne
+    survient peu après (balle toujours haute, dans le tiers offensif), c'est un
+    double tap → récompense pondérée par la puissance. Aérien → plafonné sous
+    le sol dans build_reward_fn.
+    """
+    def __init__(self, min_ball_z: float = 500.0, backboard_dist: float = 1200.0,
+                 max_ticks_between: int = 60):
+        self.min_ball_z        = min_ball_z
+        self.backboard_dist    = backboard_dist
+        self.max_ticks_between = max_ticks_between
+        self._ticks_since      = {}
+        self._prev_ball_v      = None
+
+    def reset(self, agents, initial_state, shared_info):
+        self._ticks_since = {a: 1_000_000 for a in agents}
+        self._prev_ball_v = initial_state.ball.linear_velocity.copy()
+
+    def get_rewards(self, agents, state, is_terminated, is_truncated, shared_info):
+        rewards = {a: 0.0 for a in agents}
+        if self._prev_ball_v is None:
+            self._prev_ball_v = state.ball.linear_velocity.copy()
+        ball   = state.ball
+        accel  = float(np.linalg.norm(ball.linear_velocity - self._prev_ball_v)) / BALL_MAX_SPEED
+        for agent in agents:
+            car = state.cars[agent]
+            self._ticks_since[agent] = self._ticks_since.get(agent, 1_000_000) + 1
+            opp_wall_y   = -BACK_WALL_Y if car.is_orange else BACK_WALL_Y
+            near_backbrd = abs(ball.position[1] - opp_wall_y) < self.backboard_dist
+            air_touch    = (car.ball_touches > 0 and not car.on_ground
+                            and ball.position[2] > self.min_ball_z)
+            if air_touch and near_backbrd:
+                if self._ticks_since[agent] <= self.max_ticks_between:
+                    rewards[agent] = 1.0 + accel        # 2e touche = double tap
+                self._ticks_since[agent] = 0            # arme / réarme la fenêtre
+        self._prev_ball_v = ball.linear_velocity.copy()
+        return rewards
+
 # ─────────────────────────────────────────────────────────────────────────────
 # BUILDER DE REWARDS PAR PHASE — SOL-FIRST, aérien plafonné
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1292,6 +1366,7 @@ def build_reward_fn(phase: int) -> RewardFunction:
             (SpeedTowardBallReward(),                                5.0),
             (VelocityBallToGoalReward(),                            10.0),
             (AdvancedTouchReward(touch_weight=0.5, accel_weight=2.0), 45.0),
+            (AlignBallToGoalReward(offense=1.0, defense=0.6),       10.0),
             (DribbleReward(),                                       25.0),
             (FlickReward(),                                         30.0),
             (PerfectFlickReward(),                                  20.0),
@@ -1322,6 +1397,7 @@ def build_reward_fn(phase: int) -> RewardFunction:
             (SpeedTowardBallReward(),                                4.0),
             (VelocityBallToGoalReward(),                            10.0),
             (AdvancedTouchReward(touch_weight=0.3, accel_weight=2.0), 45.0),
+            (AlignBallToGoalReward(offense=1.0, defense=0.6),       10.0),
             (DribbleReward(),                                       30.0),
             (FlickReward(),                                         35.0),
             (PerfectFlickReward(),                                  30.0),
@@ -1363,6 +1439,7 @@ def build_reward_fn(phase: int) -> RewardFunction:
             (SpeedTowardBallReward(),                                3.0),
             (VelocityBallToGoalReward(),                            10.0),
             (AdvancedTouchReward(touch_weight=0.2, accel_weight=2.0), 45.0),
+            (AlignBallToGoalReward(offense=1.0, defense=0.7),       12.0),
             (DribbleReward(),                                       35.0),
             (FlickReward(),                                         40.0),
             (PerfectFlickReward(),                                  45.0),
@@ -1386,6 +1463,7 @@ def build_reward_fn(phase: int) -> RewardFunction:
                                   ball_distance_weight=1.0),        40.0),
             (AirDribbleReward(),                                    20.0),
             (CeilingShotReward(),                                   30.0),
+            (DoubleTapReward(),                                     20.0),
             (FlipResetReward(obtain_flip_weight=15.0,
                              hit_ball_weight=30.0),                 15.0),
             (InAirReward(),                                          0.10),
@@ -1404,6 +1482,7 @@ def build_reward_fn(phase: int) -> RewardFunction:
         # — SOL (toujours au-dessus de l'aérien) —
         (VelocityBallToGoalReward(),                              12.0),
         (AdvancedTouchReward(touch_weight=0.0, accel_weight=2.5),  50.0),
+        (AlignBallToGoalReward(offense=1.0, defense=0.7),         12.0),
         (DribbleReward(),                                         40.0),
         (FlickReward(),                                           45.0),
         (PerfectFlickReward(),                                    55.0),
@@ -1427,6 +1506,7 @@ def build_reward_fn(phase: int) -> RewardFunction:
                               ball_distance_weight=1.0),           50.0),
         (AirDribbleReward(),                                      30.0),
         (CeilingShotReward(),                                     40.0),
+        (DoubleTapReward(),                                       25.0),
         (FlipResetReward(obtain_flip_weight=20.0,
                          hit_ball_weight=40.0),                   25.0),
         (InAirReward(),                                            0.10),
