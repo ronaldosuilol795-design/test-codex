@@ -1,0 +1,18 @@
+# Environnements Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Checkpoints d'entraînement (volumineux)
+data/
+checkpoints/
+*.pt
+
+# Logs
+*.log
+wandb/
+
+# OS
+.DS_Store
